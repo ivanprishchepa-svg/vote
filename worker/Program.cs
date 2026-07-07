@@ -11,23 +11,34 @@ namespace VoteWorker
     {
         static async Task Main(string[] args)
         {
-            // Читаем переменные окружения
+            // Чтение переменных окружения
             string redisUrl = Environment.GetEnvironmentVariable("REDIS_URL") ?? "redis://redis:6379";
-            string pgConnString = Environment.GetEnvironmentVariable("DATABASE_URL") 
-                ?? "Host=postgres;Database=votesdb;Username=postgres;Password=postgres";
+            string pgUrl = Environment.GetEnvironmentVariable("DATABASE_URL") 
+                ?? "postgresql://postgres:postgres@postgres:5432/votesdb";
 
-            // Настройка Redis с отложенным повторным подключением
+            // === ПАРСИНГ POSTGRESQL URL В СТАНДАРТНУЮ СТРОКУ ПОДКЛЮЧЕНИЯ ===
+            var pgUri = new Uri(pgUrl);
+            var userInfo = pgUri.UserInfo.Split(':');
+            string user = userInfo[0];
+            string password = userInfo.Length > 1 ? userInfo[1] : "";
+            string host = pgUri.Host;
+            int port = pgUri.Port;
+            string database = pgUri.AbsolutePath.TrimStart('/');
+
+            string pgConnString = $"Host={host};Port={port};Database={database};Username={user};Password={password};";
+
+            // === НАСТРОЙКА REDIS С ПОВТОРНЫМИ ПОПЫТКАМИ ===
             var redisOptions = ConfigurationOptions.Parse(redisUrl);
             redisOptions.AbortOnConnectFail = false;   // не падать при неудаче
-            redisOptions.ConnectRetry = 5;             // повторить 5 раз
-            redisOptions.ConnectTimeout = 5000;        // таймаут подключения 5 секунд
-            redisOptions.SyncTimeout = 5000;           // таймаут синхронных операций
-            redisOptions.KeepAlive = 60;               // keep-alive каждые 60 секунд
+            redisOptions.ConnectRetry = 5;
+            redisOptions.ConnectTimeout = 5000;
+            redisOptions.SyncTimeout = 5000;
+            redisOptions.KeepAlive = 60;
 
             var redis = ConnectionMultiplexer.Connect(redisOptions);
             var db = redis.GetDatabase();
 
-            // Подключение к PostgreSQL
+            // === ПОДКЛЮЧЕНИЕ К POSTGRESQL ===
             await using var pgConn = new NpgsqlConnection(pgConnString);
             await pgConn.OpenAsync();
 
@@ -42,7 +53,7 @@ namespace VoteWorker
 
             Console.WriteLine("Worker запущен. Ожидание голосов...");
 
-            // Бесконечный цикл обработки голосов
+            // === БЕСКОНЕЧНЫЙ ЦИКЛ ОБРАБОТКИ ===
             while (true)
             {
                 try
@@ -83,7 +94,6 @@ namespace VoteWorker
                 catch (Exception ex)
                 {
                     Console.WriteLine($"Ошибка при обработке: {ex.Message}");
-                    // Не прерываем цикл, ждём и продолжаем
                     await Task.Delay(1000);
                 }
             }
