@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Голосование</title>
+    <style>
+        body { font-family: Arial; text-align: center; margin-top: 50px; }
+        button { font-size: 24px; padding: 12px 32px; margin: 10px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h1>Кого выберешь?</h1>
+    <form method="post" action="/vote" onsubmit="vote(this.option.value); return false;">
+        <button type="button" onclick="vote('cats')">🐱 Кошки</button>
+        <button type="button" onclick="vote('dogs')">🐶 Собаки</button>
+    </form>
+    <script>
+        async function vote(option) {
+            const formData = new FormData();
+            formData.append('option', option);
+            await fetch('/vote', { method: 'POST', body: formData });
+            // Мгновенная обратная связь (опционально)
+            alert('Голос за ' + option + ' принят!');
+        }
+    </script>
+</body>
+</html>

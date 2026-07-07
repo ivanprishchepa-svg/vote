@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Результаты голосования</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        body { font-family: Arial; text-align: center; margin-top: 50px; }
+        .count { font-size: 48px; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>Результаты</h1>
+    <div>
+        <p>🐱 Кошки: <span id="cats" class="count">0</span></p>
+        <p>🐶 Собаки: <span id="dogs" class="count">0</span></p>
+    </div>
+    <script>
+        const socket = io();
+        socket.on('update', (data) => {
+            document.getElementById('cats').textContent = data.cats || 0;
+            document.getElementById('dogs').textContent = data.dogs || 0;
+        });
+    </script>
+</body>
+</html>
