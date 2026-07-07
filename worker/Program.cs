@@ -16,7 +16,36 @@ namespace VoteWorker
             string pgUrl = Environment.GetEnvironmentVariable("DATABASE_URL") 
                 ?? "postgresql://postgres:postgres@postgres:5432/votesdb";
 
-            // === ПАРСИНГ POSTGRESQL URL В СТАНДАРТНУЮ СТРОКУ ПОДКЛЮЧЕНИЯ ===
+            Console.WriteLine($"Raw REDIS_URL: {redisUrl}");
+
+            // === ПАРСИНГ REDIS URL ===
+            var (redisHost, redisPort, redisPassword) = ParseRedisUrl(redisUrl);
+            Console.WriteLine($"Parsed Redis: host={redisHost}, port={redisPort}, password={redisPassword != ""}");
+
+            // Настройка Redis с ручным указанием параметров
+            var redisOptions = new ConfigurationOptions
+            {
+                AbortOnConnectFail = false,   // не падать при неудаче
+                ConnectRetry = 5,
+                ConnectTimeout = 5000,
+                SyncTimeout = 5000,
+                KeepAlive = 60,
+                Password = redisPassword,
+                DefaultDatabase = 0,
+            };
+            redisOptions.EndPoints.Add(redisHost, redisPort);
+
+            // Асинхронное подключение с ожиданием готовности
+            var redis = await ConnectionMultiplexer.ConnectAsync(redisOptions);
+            while (!redis.IsConnected)
+            {
+                Console.WriteLine("Ожидание подключения к Redis...");
+                await Task.Delay(500);
+            }
+            Console.WriteLine("Подключение к Redis установлено.");
+            var db = redis.GetDatabase();
+
+            // === ПАРСИНГ POSTGRESQL URL ===
             var pgUri = new Uri(pgUrl);
             var userInfo = pgUri.UserInfo.Split(':');
             string user = userInfo[0];
@@ -26,21 +55,12 @@ namespace VoteWorker
             string database = pgUri.AbsolutePath.TrimStart('/');
 
             string pgConnString = $"Host={host};Port={port};Database={database};Username={user};Password={password};";
-
-            // === НАСТРОЙКА REDIS С ПОВТОРНЫМИ ПОПЫТКАМИ ===
-            var redisOptions = ConfigurationOptions.Parse(redisUrl);
-            redisOptions.AbortOnConnectFail = false;   // не падать при неудаче
-            redisOptions.ConnectRetry = 5;
-            redisOptions.ConnectTimeout = 5000;
-            redisOptions.SyncTimeout = 5000;
-            redisOptions.KeepAlive = 60;
-
-            var redis = ConnectionMultiplexer.Connect(redisOptions);
-            var db = redis.GetDatabase();
+            Console.WriteLine($"PostgreSQL connection string: {pgConnString}");
 
             // === ПОДКЛЮЧЕНИЕ К POSTGRESQL ===
             await using var pgConn = new NpgsqlConnection(pgConnString);
             await pgConn.OpenAsync();
+            Console.WriteLine("Подключение к PostgreSQL установлено.");
 
             // Создаём таблицу, если её нет
             await using var cmd = new NpgsqlCommand(
@@ -66,6 +86,7 @@ namespace VoteWorker
                     }
 
                     string option = vote.ToString();
+                    Console.WriteLine($"Получен голос за '{option}'");
 
                     // Upsert в PostgreSQL
                     await using var upsertCmd = new NpgsqlCommand(
@@ -97,6 +118,61 @@ namespace VoteWorker
                     await Task.Delay(1000);
                 }
             }
+        }
+
+        /// <summary>
+        /// Парсит Redis URL, извлекая хост, порт и пароль.
+        /// Обрабатывает случаи с дублирующимся портом.
+        /// </summary>
+        static (string host, int port, string password) ParseRedisUrl(string url)
+        {
+            // Удаляем схему redis:// (если есть)
+            string withoutScheme = url.StartsWith("redis://") ? url.Substring(8) : url;
+            
+            // Отделяем часть с логином/паролем до @
+            string userInfo = "";
+            string hostPort = withoutScheme;
+            int atIndex = withoutScheme.IndexOf('@');
+            if (atIndex != -1)
+            {
+                userInfo = withoutScheme.Substring(0, atIndex);
+                hostPort = withoutScheme.Substring(atIndex + 1);
+            }
+
+            // Извлекаем пароль из userInfo (формат default:password)
+            string password = "";
+            if (!string.IsNullOrEmpty(userInfo))
+            {
+                var parts = userInfo.Split(':');
+                password = parts.Length > 1 ? parts[1] : parts[0];
+            }
+
+            // Определяем хост и порт
+            string host = hostPort;
+            int port = 6379; // порт по умолчанию
+
+            // Ищем последнее двоеточие для отделения порта
+            int lastColon = hostPort.LastIndexOf(':');
+            if (lastColon != -1)
+            {
+                // Проверяем, не является ли это IPv6 (там много двоеточий)
+                if (hostPort.Count(c => c == ':') > 1)
+                {
+                    // Для IPv6 хост обычно в квадратных скобках, но мы обработаем просто: оставляем как есть
+                    // В нашем случае это обычный домен, так что просто берём последнюю часть
+                }
+                // Пробуем распарсить порт
+                string portStr = hostPort.Substring(lastColon + 1);
+                if (int.TryParse(portStr, out int parsedPort))
+                {
+                    // Если успешно, то это порт
+                    port = parsedPort;
+                    host = hostPort.Substring(0, lastColon);
+                }
+                // Если не удалось распарсить, то, возможно, это часть хоста (например, в IPv6)
+            }
+
+            return (host, port, password);
         }
     }
 }
